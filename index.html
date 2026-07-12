@@ -328,13 +328,23 @@ function parseImport(text) {
   text = text.trim();
   if (!text) return [];
   if (text[0] === "[" || text[0] === "{") {
-    try {
-      let data = JSON.parse(text);
-      if (!Array.isArray(data)) data = [data];
-      return data.map((o) => ({ name: o.name, phone: o.phone, category: o.category || o.type || "", address: o.address || "" }));
-    } catch (e) { return []; }
+    const data = tryParseJSON(text);
+    if (!data) return [];
+    const arr = Array.isArray(data) ? data : [data];
+    return arr.map((o) => ({ name: o.name, phone: o.phone, category: o.category || o.type || "", address: o.address || "" }));
   }
   return parseCSV(text);
+}
+function tryParseJSON(text) {
+  // Tolerate common paste artifacts: a trailing comma left over from copying
+  // one entry out of a larger array, or a fragment missing its [ ] wrapper.
+  const noTrailingComma = text.replace(/,\s*$/, "");
+  const attempts = [text, noTrailingComma, `[${noTrailingComma}]`];
+  for (const attempt of attempts) {
+    try { return JSON.parse(attempt.replace(/,(\s*[}\]])/g, "$1")); }
+    catch (e) { /* try next */ }
+  }
+  return null;
 }
 function parseCSV(text) {
   const lines = text.split(/\r?\n/).filter((l) => l.trim());
