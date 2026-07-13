@@ -319,21 +319,37 @@ function makeLead(o) {
   };
 }
 function addLeads(items) {
-  const have = new Set(leads.map((l) => digits(l.phone)).filter(Boolean));
-  const haveNames = new Set(leads.map((l) => l.name.toLowerCase()));
-  let added = 0;
+  const byPhone = new Map();
+  const byName = new Map();
+  for (const l of leads) {
+    const d = digits(l.phone);
+    if (d) byPhone.set(d, l);
+    else byName.set(l.name.toLowerCase(), l);
+  }
+  let added = 0, enriched = 0;
   for (const it of items) {
     const d = digits(it.phone);
-    if (d && have.has(d)) continue;
-    if (!d && haveNames.has((it.name || "").toLowerCase())) continue;
+    const existing = d ? byPhone.get(d) : byName.get((it.name || "").toLowerCase());
+    if (existing) {
+      // Already have this lead — but a re-run of the finder/enrichment script may now
+      // carry an owner guess it didn't have before, so backfill that instead of skipping.
+      if (!existing.possibleOwner && (it.possibleOwner || "").trim()) {
+        existing.possibleOwner = (it.possibleOwner || "").trim();
+        existing.ownerConfidence = typeof it.ownerConfidence === "number" ? it.ownerConfidence : null;
+        existing.ownerSources = Array.isArray(it.ownerSources) ? it.ownerSources : [];
+        existing.ownerResearchLinks = (it.ownerResearchLinks && typeof it.ownerResearchLinks === "object") ? it.ownerResearchLinks : {};
+        enriched++;
+      }
+      continue;
+    }
     const lead = makeLead(it);
     leads.push(lead);
-    if (d) have.add(d);
-    haveNames.add(lead.name.toLowerCase());
+    if (d) byPhone.set(d, lead);
+    else byName.set(lead.name.toLowerCase(), lead);
     added++;
   }
-  scheduleSave();
-  return added;
+  if (added || enriched) scheduleSave();
+  return { added, enriched };
 }
 function getLead(id) { return leads.find((l) => l.id === id); }
 
@@ -629,11 +645,14 @@ $("#importBtn").onclick = () => {
   $("#doImport").onclick = () => {
     const items = parseImport($("#importText").value);
     if (!items.length) { $("#importResult").style.color = "var(--red)"; $("#importResult").textContent = "Couldn't read that — check it's valid JSON or CSV."; return; }
-    const added = addLeads(items);
+    const { added, enriched } = addLeads(items);
     renderAll();
     $("#importResult").style.color = "var(--green-deep)";
-    $("#importResult").textContent = `Added ${added} new lead${added === 1 ? "" : "s"} to your list of ${leads.length}` + (added < items.length ? ` (${items.length - added} were duplicates).` : ".");
-    if (added) setTimeout(closeModal, 900);
+    const skipped = items.length - added - enriched;
+    $("#importResult").textContent = `Added ${added} new lead${added === 1 ? "" : "s"} to your list of ${leads.length}`
+      + (enriched ? `, filled in an owner guess for ${enriched} existing lead${enriched === 1 ? "" : "s"}` : "")
+      + (skipped > 0 ? ` (${skipped} were already up to date).` : ".");
+    if (added || enriched) setTimeout(closeModal, 900);
   };
   setTimeout(() => $("#importText").focus(), 50);
 };
