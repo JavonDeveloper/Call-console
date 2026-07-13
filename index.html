@@ -86,6 +86,14 @@
   .card .meta { font-size: 12.5px; color: var(--ink-soft); margin-top: 1px; display: flex; gap: 8px; flex-wrap: wrap; }
   .card .meta .dot::before { content: "·"; margin-right: 8px; color: var(--ink-faint); }
   .phone { font-family: var(--mono); font-size: 15px; font-weight: 600; letter-spacing: 0.01em; margin-top: 8px; color: var(--ink); }
+  .owner-guess { font-size: 12.5px; color: var(--ink-soft); margin-top: 4px; }
+  .owner-guess b { color: var(--ink); }
+  .owner-guess .conf { color: var(--ink-faint); }
+  .maps-link { font-size: 12px; font-weight: 600; color: var(--accent); text-decoration: none; }
+  .maps-link:hover { text-decoration: underline; }
+  .research-links { display: flex; gap: 10px; margin-top: 3px; }
+  .research-links a { font-size: 12px; font-weight: 600; color: var(--accent); text-decoration: none; }
+  .research-links a:hover { text-decoration: underline; }
   .chip { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.03em; }
   .due-flag { font-size: 11.5px; font-weight: 700; color: var(--amber); }
   .due-flag.over { color: var(--red); }
@@ -296,6 +304,12 @@ function makeLead(o) {
     phone: (o.phone || "").trim(),
     category: (o.category || "").trim(),
     address: (o.address || "").trim(),
+    maps: (o.maps || "").trim(),
+    foundVia: (o.foundVia || "").trim(),
+    possibleOwner: (o.possibleOwner || "").trim(),
+    ownerConfidence: typeof o.ownerConfidence === "number" ? o.ownerConfidence : null,
+    ownerSources: Array.isArray(o.ownerSources) ? o.ownerSources : [],
+    ownerResearchLinks: (o.ownerResearchLinks && typeof o.ownerResearchLinks === "object") ? o.ownerResearchLinks : {},
     status: "new",
     notes: "",
     followUp: "",
@@ -331,7 +345,18 @@ function parseImport(text) {
     const data = tryParseJSON(text);
     if (!data) return [];
     const arr = Array.isArray(data) ? data : [data];
-    return arr.map((o) => ({ name: o.name, phone: o.phone, category: o.category || o.type || "", address: o.address || "" }));
+    return arr.map((o) => ({
+      name: o.name,
+      phone: o.phone,
+      category: o.category || o.type || "",
+      address: o.address || "",
+      maps: o.maps || "",
+      foundVia: o.foundVia || "",
+      possibleOwner: o.possibleOwner || "",
+      ownerConfidence: o.ownerConfidence,
+      ownerSources: o.ownerSources || [],
+      ownerResearchLinks: o.ownerResearchLinks || {},
+    }));
   }
   return parseCSV(text);
 }
@@ -380,9 +405,9 @@ function splitCSVLine(line) {
 
 /* ---------- export ---------- */
 function exportCSV() {
-  const head = ["Name", "Phone", "Category", "Status", "Follow-up", "Last contact", "Calls", "Notes", "Address"];
+  const head = ["Name", "Phone", "Category", "Status", "Follow-up", "Last contact", "Calls", "Notes", "Address", "Possible owner", "Owner confidence", "Maps"];
   const esc2 = (v) => { const s = (v ?? "").toString(); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
-  const rows = leads.map((l) => [l.name, l.phone, l.category, STATUS[l.status].label, l.followUp, fmtWhen(l.lastContact), l.callCount, l.notes, l.address].map(esc2).join(","));
+  const rows = leads.map((l) => [l.name, l.phone, l.category, STATUS[l.status].label, l.followUp, fmtWhen(l.lastContact), l.callCount, l.notes, l.address, l.possibleOwner || "", l.ownerConfidence != null ? l.ownerConfidence : "", l.maps || ""].map(esc2).join(","));
   return [head.join(","), ...rows].join("\n");
 }
 
@@ -461,7 +486,8 @@ function renderList() {
   }
   list.innerHTML = items.map((l) => {
     const st = STATUS[l.status];
-    const meta = [l.category, l.address].filter(Boolean).map((x, i) => `<span class="${i ? "dot" : ""}">${esc(x)}</span>`).join("");
+    const catDisplay = l.category || l.foundVia || "";
+    const meta = [catDisplay, l.address].filter(Boolean).map((x, i) => `<span class="${i ? "dot" : ""}">${esc(x)}</span>`).join("");
     const callInfo = l.callCount ? `<span class="dot">${l.callCount} call${l.callCount > 1 ? "s" : ""}</span>` +
       (l.lastContact ? `<span class="dot">last ${fmtWhen(l.lastContact)}</span>` : "") : "";
     let dueTxt = "";
@@ -471,15 +497,24 @@ function renderList() {
       if (over || on) dueTxt = `<span class="due-flag ${over ? "over" : ""}">${over ? "Overdue follow-up" : "Follow up today"}</span>`;
     }
     const tel = digits(l.phone);
+    const ownerLine = l.possibleOwner ? `<div class="owner-guess"${l.ownerSources && l.ownerSources.length ? ` title="Source: ${esc(l.ownerSources.join(", "))}"` : ""}>Likely owner: <b>${esc(l.possibleOwner)}</b>${l.ownerConfidence != null ? ` <span class="conf">(${Math.round(l.ownerConfidence * 100)}% confidence)</span>` : ""}</div>` : "";
+    const RESEARCH_LABELS = { googleOwner: "Google", googleFacebook: "Facebook", linkedin: "LinkedIn" };
+    const researchLinks = l.ownerResearchLinks && Object.keys(l.ownerResearchLinks).length
+      ? `<div class="research-links">${Object.entries(l.ownerResearchLinks).map(([k, v]) => v ? `<a href="${esc(v)}" target="_blank" rel="noopener">${esc(RESEARCH_LABELS[k] || k)} ↗</a>` : "").join("")}</div>`
+      : "";
+    const mapsLink = l.maps ? `<a class="maps-link" href="${esc(l.maps)}" target="_blank" rel="noopener">View on Maps ↗</a>` : "";
     return `
       <div class="card" style="border-left-color:${st.color}">
         <div class="main">
           <div class="name">${esc(l.name)}</div>
           <div class="meta">${meta}${callInfo}</div>
           ${l.phone ? `<div class="phone">${esc(l.phone)}</div>` : `<div class="phone" style="color:var(--ink-faint)">no number</div>`}
-          <div style="margin-top:6px; display:flex; gap:10px; align-items:center;">
+          ${ownerLine}
+          ${researchLinks}
+          <div style="margin-top:6px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
             <span class="chip" style="color:${st.color};background:${st.color}14">${st.label}</span>
             ${dueTxt}
+            ${mapsLink}
           </div>
         </div>
         <div class="controls">
