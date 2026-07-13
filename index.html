@@ -186,6 +186,7 @@
       <option value="name">Sort: Name</option>
       <option value="recent">Sort: Newest</option>
       <option value="calls">Sort: Most called</option>
+      <option value="owner">Sort: Owner confidence</option>
     </select>
   </div>
 
@@ -462,6 +463,13 @@ function visibleLeads() {
     if (sortBy === "name") return a.name.localeCompare(b.name);
     if (sortBy === "recent") return b.createdAt.localeCompare(a.createdAt);
     if (sortBy === "calls") return b.callCount - a.callCount;
+    if (sortBy === "owner") {
+      const aHas = a.possibleOwner ? 1 : 0, bHas = b.possibleOwner ? 1 : 0;
+      if (aHas !== bHas) return bHas - aHas; // leads with a guess first
+      const ac = a.ownerConfidence ?? -1, bc = b.ownerConfidence ?? -1;
+      if (ac !== bc) return bc - ac; // highest confidence first
+      return (a.possibleOwner || "").localeCompare(b.possibleOwner || "");
+    }
     // smart
     const r = rank(a) - rank(b);
     if (r) return r;
