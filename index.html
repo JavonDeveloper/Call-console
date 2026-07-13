@@ -109,6 +109,13 @@
   textarea.notes-in::placeholder { color: var(--ink-faint); }
   .del { align-self: flex-end; background: none; border: none; color: var(--ink-faint); font-size: 12px; font-weight: 600; cursor: pointer; padding: 2px; }
   .del:hover { color: var(--red); }
+  .btn.danger { color: var(--red); }
+  .btn.danger:hover { border-color: var(--red); background: var(--red-soft); }
+
+  /* Deleted */
+  .deleted-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: var(--surface); border: 1px dashed var(--line-strong); border-radius: var(--radius); padding: 10px 14px; font-size: 13px; color: var(--ink-soft); font-weight: 600; }
+  .card.deleted { opacity: 0.72; }
+  .card.deleted .controls { justify-content: flex-start; }
 
   /* Empty */
   .empty { text-align: center; padding: 54px 20px; color: var(--ink-soft); background: var(--surface); border: 1px dashed var(--line-strong); border-radius: var(--radius); }
@@ -147,6 +154,7 @@
     <div style="display:flex; gap:8px;">
       <button class="btn" id="importBtn">Import</button>
       <button class="btn" id="exportBtn">Export</button>
+      <button class="btn danger" id="clearAllBtn">Clear all</button>
       <button class="btn primary" id="addBtn">+ Add lead</button>
     </div>
   </header>
@@ -205,11 +213,12 @@ const STATUS = {
 };
 
 const FILTERS = [
-  { id: "all",    label: "All" },
-  { id: "tocall", label: "To call" },
-  { id: "due",    label: "Due" },
-  { id: "warm",   label: "Warm" },
-  { id: "won",    label: "Won" },
+  { id: "all",     label: "All" },
+  { id: "tocall",  label: "To call" },
+  { id: "due",     label: "Due" },
+  { id: "warm",    label: "Warm" },
+  { id: "won",     label: "Won" },
+  { id: "deleted", label: "Deleted" },
 ];
 
 let leads = [];
@@ -316,6 +325,8 @@ function makeLead(o) {
     lastContact: null,
     callCount: 0,
     createdAt: new Date().toISOString(),
+    deleted: false,
+    deletedAt: null,
   };
 }
 function addLeads(items) {
@@ -430,6 +441,8 @@ function exportCSV() {
 /* ---------- render ---------- */
 function visibleLeads() {
   let out = leads.filter((l) => {
+    if (filter === "deleted") return !!l.deleted;
+    if (l.deleted) return false;
     if (filter === "tocall" && STATUS[l.status].group !== "tocall") return false;
     if (filter === "warm" && STATUS[l.status].group !== "warm") return false;
     if (filter === "won" && STATUS[l.status].group !== "won") return false;
@@ -461,10 +474,11 @@ function visibleLeads() {
 }
 
 function renderStats() {
-  const g = (grp) => leads.filter((l) => STATUS[l.status].group === grp).length;
-  const due = leads.filter(isDue).length;
+  const active = leads.filter((l) => !l.deleted);
+  const g = (grp) => active.filter((l) => STATUS[l.status].group === grp).length;
+  const due = active.filter(isDue).length;
   const data = [
-    { n: leads.length, l: "Leads" },
+    { n: active.length, l: "Leads" },
     { n: g("tocall"), l: "To call" },
     { n: due, l: "Due today", cls: due ? "hot" : "" },
     { n: g("warm"), l: "Warm" },
@@ -474,11 +488,13 @@ function renderStats() {
 }
 
 function renderFilters() {
+  const active = leads.filter((l) => !l.deleted);
   const count = (id) => {
-    if (id === "all") return leads.length;
-    if (id === "due") return leads.filter(isDue).length;
+    if (id === "all") return active.length;
+    if (id === "deleted") return leads.filter((l) => l.deleted).length;
+    if (id === "due") return active.filter(isDue).length;
     const map = { tocall: "tocall", warm: "warm", won: "won" };
-    return leads.filter((l) => STATUS[l.status].group === map[id]).length;
+    return active.filter((l) => STATUS[l.status].group === map[id]).length;
   };
   $("#filters").innerHTML = FILTERS.map((f) =>
     `<button data-filter="${f.id}" class="${filter === f.id ? "active" : ""}">${f.label}<span class="c">${count(f.id)}</span></button>`
@@ -492,15 +508,46 @@ function statusOptions(cur) {
 function renderList() {
   const items = visibleLeads();
   const list = $("#list");
-  if (!leads.length) {
+  const activeCount = leads.filter((l) => !l.deleted).length;
+  const deletedCount = leads.filter((l) => l.deleted).length;
+  if (filter !== "deleted" && !activeCount) {
     list.innerHTML = `<div class="empty"><h3>No leads yet</h3><p>Hit <b>+ Add lead</b> to enter one by hand,</p><p>or <b>Import</b> the leads.json / leads.csv from your finder script.</p></div>`;
+    return;
+  }
+  if (filter === "deleted" && !deletedCount) {
+    list.innerHTML = `<div class="empty"><h3>Nothing deleted</h3><p>Leads you delete or clear show up here so you can pull them back.</p></div>`;
     return;
   }
   if (!items.length) {
     list.innerHTML = `<div class="empty"><h3>Nothing here</h3><p>No leads match this filter or search.</p></div>`;
     return;
   }
-  list.innerHTML = items.map((l) => {
+  const deletedBar = filter === "deleted"
+    ? `<div class="deleted-bar"><span>${deletedCount} deleted lead${deletedCount === 1 ? "" : "s"}</span>
+        <div style="display:flex; gap:8px;">
+          <button class="btn" data-act="restore-all">Restore all</button>
+          <button class="btn danger" data-act="purge-all">Empty trash</button>
+        </div>
+      </div>`
+    : "";
+  list.innerHTML = deletedBar + items.map((l) => {
+    if (l.deleted) {
+      const catDisplay = l.category || l.foundVia || "";
+      const meta = [catDisplay, l.address].filter(Boolean).map((x, i) => `<span class="${i ? "dot" : ""}">${esc(x)}</span>`).join("");
+      return `
+        <div class="card deleted" style="border-left-color:var(--gray)">
+          <div class="main">
+            <div class="name">${esc(l.name)}</div>
+            <div class="meta">${meta}</div>
+            ${l.phone ? `<div class="phone">${esc(l.phone)}</div>` : ""}
+            <div class="meta" style="margin-top:6px;">Deleted ${fmtWhen(l.deletedAt)}</div>
+          </div>
+          <div class="controls">
+            <button class="btn primary" data-id="${l.id}" data-act="restore">Restore</button>
+            <button class="del" data-id="${l.id}" data-act="purge">Delete forever</button>
+          </div>
+        </div>`;
+    }
     const st = STATUS[l.status];
     const catDisplay = l.category || l.foundVia || "";
     const meta = [catDisplay, l.address].filter(Boolean).map((x, i) => `<span class="${i ? "dot" : ""}">${esc(x)}</span>`).join("");
@@ -576,6 +623,18 @@ $("#filters").addEventListener("click", (e) => {
 const list = $("#list");
 list.addEventListener("click", (e) => {
   const el = e.target.closest("[data-act]"); if (!el) return;
+  if (el.dataset.act === "restore-all") {
+    leads.filter((l) => l.deleted).forEach((l) => { l.deleted = false; l.deletedAt = null; });
+    scheduleSave(); renderAll();
+    return;
+  }
+  if (el.dataset.act === "purge-all") {
+    const n = leads.filter((l) => l.deleted).length;
+    if (!n || !confirm(`Permanently delete ${n} lead${n === 1 ? "" : "s"}? This can't be undone.`)) return;
+    leads = leads.filter((l) => !l.deleted);
+    scheduleSave(); renderAll();
+    return;
+  }
   const l = getLead(el.dataset.id); if (!l) return;
   if (el.dataset.act === "call") {
     l.callCount++; l.lastContact = new Date().toISOString();
@@ -583,9 +642,23 @@ list.addEventListener("click", (e) => {
     scheduleSave();
     setTimeout(renderAll, 60); // let tel: fire first
   } else if (el.dataset.act === "del") {
+    l.deleted = true; l.deletedAt = new Date().toISOString(); scheduleSave(); renderAll();
+  } else if (el.dataset.act === "restore") {
+    l.deleted = false; l.deletedAt = null; scheduleSave(); renderAll();
+  } else if (el.dataset.act === "purge") {
     leads = leads.filter((x) => x.id !== l.id); scheduleSave(); renderAll();
   }
 });
+
+$("#clearAllBtn").onclick = () => {
+  const active = leads.filter((l) => !l.deleted);
+  if (!active.length) return;
+  if (!confirm(`Move all ${active.length} lead${active.length === 1 ? "" : "s"} to Deleted? You can restore them anytime from the Deleted tab.`)) return;
+  const now = new Date().toISOString();
+  active.forEach((l) => { l.deleted = true; l.deletedAt = now; });
+  scheduleSave();
+  renderAll();
+};
 list.addEventListener("change", (e) => {
   const el = e.target.closest("[data-field]"); if (!el) return;
   const l = getLead(el.dataset.id); if (!l) return;
